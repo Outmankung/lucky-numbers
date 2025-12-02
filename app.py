@@ -4,16 +4,100 @@ import random
 import math
 import pandas as pd
 import os
-from datetime import datetime
+import requests
+# import json
+from datetime import datetime, date
+from zhdate import ZhDate
 
-# --- 核心逻辑类 (复用之前的逻辑并优化) ---
+# ===========================
+# 🎨 CSS 魔法区 (移动端深度适配)
+# ===========================
+st.set_page_config(page_title="赛博玄学终端 Mobile", page_icon="🔮", layout="centered", initial_sidebar_state="collapsed")
+
+st.markdown("""
+<style>
+    /* 隐藏顶部汉堡菜单和底部页脚，打造纯净App感 */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stApp { background-color: #0e1117; }
+
+    /* 移动端标题样式 */
+    .mobile-header {
+        background: linear-gradient(45deg, #ff00cc, #3333ff, #00dbde);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-weight: 900; font-size: 1.8em; text-align: center; margin: 10px 0 20px 0;
+    }
+    
+    /* 卡片容器 - 更紧凑的移动端边距 */
+    .cyber-card {
+        background-color: #1c1f26; padding: 15px; border-radius: 12px;
+        border: 1px solid #2d313a; box-shadow: 0 2px 8px rgba(0,0,0,0.2); margin-bottom: 15px;
+    }
+    
+    /* 章节小标题 */
+    .section-title {
+        font-size: 1.1em; font-weight: bold; color: #e0e0e0; margin-bottom: 12px; display: flex; align-items: center;
+    }
+    .section-icon { margin-right: 8px; }
+
+    /* 主按钮优化 - 更适合手指点击 */
+    .stButton>button[kind="primary"] {
+        background: linear-gradient(90deg, #ff4d4f 0%, #f73859 100%);
+        border: none; border-radius: 12px; height: 55px; font-size: 20px; font-weight: bold; width: 100%;
+        box-shadow: 0 4px 15px rgba(247, 56, 89, 0.3); transition: all 0.2s ease;
+    }
+    .stButton>button[kind="primary"]:active { transform: scale(0.98); }
+
+    /* 球体样式适配 */
+    .lottery-ball-red, .lottery-ball-blue {
+        width: 34px; height: 34px; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+        font-weight: 900; font-size: 15px; 
+    }
+    .lottery-ball-red { background: radial-gradient(circle at 30% 30%, #ff6b6b, #c0392b); box-shadow: inset 0 2px 3px rgba(255,255,255,0.3); }
+    .lottery-ball-blue { background: radial-gradient(circle at 30% 30%, #4facfe, #00f2fe); box-shadow: inset 0 2px 3px rgba(255,255,255,0.3); }
+
+    /* 复制按钮样式优化 */
+    .copy-btn-container { margin-top: 15px; }
+    .copy-btn {
+        background-color: #2b324a; color: #00dbde; border: 1px solid #3333ff; padding: 12px 0;
+        border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; font-size: 16px;
+        transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .copy-btn:active { background-color: #3333ff; color: white; }
+
+    /* Tab样式微调 */
+    [data-testid="stTabs"] button { flex: 1; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
+
+# ===========================
+# 🧠 工具函数 (保持不变)
+# ===========================
+def get_zodiac(month, day):
+    zodiacs = [
+        ('摩羯座 ♑', (1, 20)), ('水瓶座 ♒', (2, 19)), ('双鱼座 ♓', (3, 20)), ('白羊座 ♈', (4, 20)),
+        ('金牛座 ♉', (5, 21)), ('双子座 ♊', (6, 21)), ('巨蟹座 ♋', (7, 22)), ('狮子座 ♌', (8, 23)),
+        ('处女座 ♍', (9, 23)), ('天秤座 ♎', (10, 23)), ('天蝎座 ♏', (11, 22)), ('射手座 ♐', (12, 22)),
+        ('摩羯座 ♑', (12, 31))
+    ]
+    for z_name, (end_month, end_day) in zodiacs:
+        if month < end_month or (month == end_month and day <= end_day): return z_name
+    return '摩羯座 ♑'
+
+def get_chinese_zodiac(lunar_year):
+    zodiacs = ["猴 🐒", "鸡 🐓", "狗 🐕", "猪 🐖", "鼠 🐀", "牛 🐂", "虎 🐅", "兔 🐇", "龙 🐉", "蛇 🐍", "马 🐎", "羊 🐏"]
+    return zodiacs[lunar_year % 12]
+
+# ===========================
+# 🧠 核心逻辑区 (保持不变)
+# ===========================
 class PersonalLotteryTool:
     def __init__(self, user_profile):
         self.profile = user_profile
         self.seed_val = self._generate_soul_seed()
 
     def _generate_soul_seed(self):
-        raw_data = f"{self.profile['solar']}{self.profile['lunar']}{self.profile['mbti']}{self.profile['gender']}{self.profile['place']}{self.profile['zodiac']}"
+        raw_data = f"{self.profile['solar']}{self.profile['lunar_str']}{self.profile['mbti']}{self.profile['place']}{self.profile['zodiac_sign']}{self.profile['chinese_zodiac']}"
         hash_object = hashlib.sha256(raw_data.encode())
         return int(hash_object.hexdigest(), 16)
 
@@ -22,7 +106,6 @@ class PersonalLotteryTool:
         return math.factorial(n) // (math.factorial(k) * math.factorial(n - k))
 
     def generate(self, game_type, period, r_count, b_count, is_append=False):
-        # 混合 个人种子 + 期号 + 时间戳(微秒级，保证同配置多次点击不同)
         current_seed = self.seed_val + int(period) + datetime.now().microsecond
         random.seed(current_seed)
 
@@ -33,7 +116,6 @@ class PersonalLotteryTool:
             blue = sorted(random.sample(pool_blue, b_count))
             bets = self._combinations(len(red), 5) * self._combinations(len(blue), 2)
             unit_price = 3 if is_append else 2
-            
         else: # ssq
             pool_red = list(range(1, 34))
             pool_blue = list(range(1, 17))
@@ -41,7 +123,7 @@ class PersonalLotteryTool:
             blue = sorted(random.sample(pool_blue, b_count))
             bets = self._combinations(len(red), 6) * self._combinations(len(blue), 1)
             unit_price = 2
-            is_append = False # 双色球无追加
+            is_append = False
 
         price = bets * unit_price
         return {
@@ -52,155 +134,241 @@ class PersonalLotteryTool:
             "bets": bets,
             "price": price,
             "is_append": is_append,
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M")
+            "date": datetime.now().strftime("%m-%d %H:%M")
         }
 
-# --- 界面辅助函数 ---
-def render_balls(reds, blues):
-    """画出漂亮的球"""
-    html = '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px;">'
-    for r in reds:
-        html += f'<div style="width:35px; height:35px; background-color:#ff4d4f; color:white; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold; box-shadow: 2px 2px 5px rgba(0,0,0,0.2);">{r:02d}</div>'
-    for b in blues:
-        html += f'<div style="width:35px; height:35px; background-color:#1890ff; color:white; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold; box-shadow: 2px 2px 5px rgba(0,0,0,0.2);">{b:02d}</div>'
+class LotteryAPI:
+    def __init__(self, appkey):
+        self.appkey = appkey
+        self.base_url = "https://api.jisuapi.com/caipiao"
+        self.game_ids = self._fetch_game_ids()
+
+    def _fetch_game_ids(self):
+        if not self.appkey: return {}
+        try:
+            url = f"{self.base_url}/class?appkey={self.appkey}"
+            res = requests.get(url, timeout=5).json()
+            if res['status'] != 0: return {}
+            mapping = {}
+            for item in res['result']:
+                if item['name'] == '超级大乐透': mapping['大乐透'] = item['caipiaoid']
+                elif item['name'] == '双色球': mapping['双色球'] = item['caipiaoid']
+            return mapping
+        except: return {}
+
+    def get_draw_result(self, game_name, period):
+        if not self.appkey or game_name not in self.game_ids: return None, "API key无效或彩种未识别"
+        cid = self.game_ids[game_name]
+        url = f"{self.base_url}/query?appkey={self.appkey}&caipiaoid={cid}&issueno={period}"
+        try:
+            res = requests.get(url, timeout=8).json()
+            if res['status'] == 0: return res['result'], "OK"
+            else: return None, res['msg']
+        except Exception as e: return None, str(e)
+
+    def get_recent_history(self, game_name, num=5):
+        if not self.appkey or game_name not in self.game_ids: return []
+        cid = self.game_ids[game_name]
+        url = f"{self.base_url}/history?appkey={self.appkey}&caipiaoid={cid}&num={num}"
+        try:
+            res = requests.get(url, timeout=8).json()
+            if res['status'] == 0: return res['result']['list']
+        except: pass
+        return []
+
+# ===========================
+# 📱 界面渲染区 (移动端布局)
+# ===========================
+def render_balls_fancy(reds, blues):
+    html = '<div style="display:flex; flex-wrap:wrap; gap:6px; margin: 12px 0; justify-content: center;">'
+    for r in reds: html += f'<div class="lottery-ball-red">{int(r):02d}</div>'
+    for b in blues: html += f'<div class="lottery-ball-blue">{int(b):02d}</div>'
     html += '</div>'
     st.markdown(html, unsafe_allow_html=True)
 
-# --- 页面配置 ---
-st.set_page_config(page_title="玄学选号助手", page_icon="🎱", layout="centered")
-
-# --- 侧边栏：个人档案 (玄学因子) ---
-with st.sidebar:
-    st.header("🧬 能量校准")
-    st.info("输入你的信息，生成专属随机种子")
-    solar = st.date_input("阳历生日", value=datetime(1990, 1, 1))
-    lunar = st.text_input("阴历生日 (例: 四月廿六)", "四月廿六")
-    mbti = st.selectbox("MBTI 人格", ["INTJ", "INTP", "ENTJ", "ENTP", "INFJ", "INFP", "ENFJ", "ENFP", "ISTJ", "ISFJ", "ESTJ", "ESFJ", "ISTP", "ISFP", "ESTP", "ESFP"])
-    gender = st.radio("性别", ["男", "女"], horizontal=True)
-    place = st.text_input("出生地点", "Shanghai")
-    zodiac = st.selectbox("星座", ["白羊", "金牛", "双子", "巨蟹", "狮子", "处女", "天秤", "天蝎", "射手", "摩羯", "水瓶", "双鱼"])
-    
-    user_profile = {
-        "solar": str(solar), "lunar": lunar, "mbti": mbti, 
-        "gender": gender, "place": place, "zodiac": zodiac
-    }
-
 # --- 主界面 ---
-st.title("🎱 灵感选号 & 追踪")
+st.markdown('<div class="mobile-header">🔮 赛博玄学终端</div>', unsafe_allow_html=True)
 
-tab1, tab2 = st.tabs(["🎲 生成号码", "📜 历史与核对"])
-
-tool = PersonalLotteryTool(user_profile)
-
-# CSV文件路径
+# 移动端Tab导航风格
+tab1, tab2, tab3 = st.tabs(["⚡️ 算号", "📜 记录", "📈 走势"])
 HISTORY_FILE = 'lottery_history.csv'
 
+# --- Tab 1: 算号首页 (核心改动区) ---
 with tab1:
-    col1, col2 = st.columns(2)
-    with col1:
-        game_type = st.selectbox("选择彩种", ["dlt", "ssq"], format_func=lambda x: "大乐透" if x=="dlt" else "双色球")
-    with col2:
-        period = st.text_input("期号 (例: 25001)", value="25001")
+    # 1. API设置折叠面板 (藏起来)
+    with st.expander("⚙️ 接口设置 (AppKey)", expanded=False):
+        api_key = st.text_input("输入 Key 用于核对", type="password", placeholder="在此粘贴极速数据 AppKey")
+        api_tool = LotteryAPI(api_key) if api_key else None
 
-    st.write("---")
+    # 2. 个人档案卡片 (平铺显示)
+    st.markdown('<div class="cyber-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title"><span class="section-icon">🧬</span>你的能量档案</div>', unsafe_allow_html=True)
     
-    # 动态配置区域
-    if game_type == 'dlt':
-        st.subheader("大乐透配置 (5+2)")
-        col_r, col_b = st.columns(2)
-        with col_r:
-            r_count = st.slider("红球数量 (复式)", 5, 18, 5)
-        with col_b:
-            b_count = st.slider("蓝球数量 (复式)", 2, 12, 2)
-        is_append = st.checkbox("🔮 追加投注 (+1元/注)", value=True)
-    else:
-        st.subheader("双色球配置 (6+1)")
-        col_r, col_b = st.columns(2)
-        with col_r:
-            r_count = st.slider("红球数量 (复式)", 6, 20, 6)
-        with col_b:
-            b_count = st.slider("蓝球数量 (复式)", 1, 16, 1)
-        is_append = False
+    # 生日选择 (默认 1987-10-14)
+    default_solar = date(1987, 10, 14)
+    solar = st.date_input("阳历诞辰", value=default_solar)
 
-    # 实时价格预览
+    # 自动计算逻辑
+    lunar_date = ZhDate.from_datetime(datetime.combine(solar, datetime.min.time()))
+    lunar_str = f"{lunar_date.lunar_month_chinese()}{lunar_date.lunar_day_chinese()}"
+    chinese_zodiac = get_chinese_zodiac(lunar_date.lunar_year)
+    zodiac_sign = get_zodiac(solar.month, solar.day)
+
+    # 展示计算结果 (使用 Info 组件)
+    st.info(f"🌙 农历: {lunar_str} ({chinese_zodiac}年) | ✨ 星座: {zodiac_sign}")
+
+    # MBTI 选择 (默认 ENFJ)
+    mbti_options = ["INTJ 建筑师", "INTP 逻辑学家", "ENTJ 指挥官", "ENTP 辩论家", "INFJ 提倡者", "INFP 调停者", "ENFJ 主人公", "ENFP 竞选者", "ISTJ 物流师", "ISFJ 守卫者", "ESTJ 总经理", "ESFJ 执政官", "ISTP 鉴赏家", "ISFP 探险家", "ESTP 企业家", "ESFP 表演者"]
+    default_mbti_index = mbti_options.index("ENFJ 主人公")
+    mbti = st.selectbox("MBTI 人格", mbti_options, index=default_mbti_index)
+
+    place = st.text_input("出生城市 (拼音)", "Shanghai")
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # 构建用户画像对象
+    user_profile = {"solar": str(solar),"lunar_str": lunar_str,"chinese_zodiac": chinese_zodiac,"zodiac_sign": zodiac_sign,"mbti": mbti[:4],"place": place}
+    tool = PersonalLotteryTool(user_profile)
+
+    # 3. 选号参数卡片
+    st.markdown('<div class="cyber-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title"><span class="section-icon">🎯</span>目标与参数</div>', unsafe_allow_html=True)
+    
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        game_type = st.selectbox("彩种", ["dlt", "ssq"], format_func=lambda x: "大乐透" if x=="dlt" else "双色球")
+    with c2:
+        period = st.text_input("期号", value=f"25001")
+    
+    st.divider() # 分割线
+
     if game_type == 'dlt':
+        st.caption("复式配置 (红球5-18，蓝球2-12)")
+        r_count = st.slider("🔴 红球数", 5, 18, 5, label_visibility="collapsed")
+        b_count = st.slider("🔵 蓝球数", 2, 12, 2, label_visibility="collapsed")
+        is_append = st.toggle("🔮 追加投注 (+50%奖金)", value=True)
         est_bets = tool._combinations(r_count, 5) * tool._combinations(b_count, 2)
         est_price = est_bets * (3 if is_append else 2)
     else:
+        st.caption("复式配置 (红球6-20，蓝球1-16)")
+        r_count = st.slider("🔴 红球数", 6, 20, 6, label_visibility="collapsed")
+        b_count = st.slider("🔵 蓝球数", 1, 16, 1, label_visibility="collapsed")
+        is_append = False
         est_bets = tool._combinations(r_count, 6) * tool._combinations(b_count, 1)
         est_price = est_bets * 2
     
-    st.caption(f"当前配置: {est_bets} 注 | 预计金额: ¥{est_price}")
+    st.markdown(f"<div style='text-align:right; font-weight:bold; color:#00dbde;'>共 {est_bets} 注 | 预计 ¥{est_price}</div>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.button("✨ 启动玄学算法生成", type="primary", use_container_width=True):
-        result = tool.generate(game_type, period, r_count, b_count, is_append)
-        
-        st.success(f"生成成功！依据: {mbti} + {zodiac} 能量场")
-        render_balls(result['red'], result['blue'])
-        
-        st.info(f"""
-        **详细清单**:
-        - 💰 金额: **¥{result['price']}** ({result['bets']}注)
-        - 📝 模式: {'追加' if result['is_append'] else '标准'} {'复式' if result['bets']>1 else '单式'}
-        """)
-        
-        # 保存到历史记录
-        df_new = pd.DataFrame([result])
-        # 数组转字符串以便CSV保存
-        df_new['red'] = df_new['red'].apply(lambda x: str(x))
-        df_new['blue'] = df_new['blue'].apply(lambda x: str(x))
-        
-        if os.path.exists(HISTORY_FILE):
-            df_new.to_csv(HISTORY_FILE, mode='a', header=False, index=False)
-        else:
-            df_new.to_csv(HISTORY_FILE, mode='w', header=True, index=False)
-        
-        st.toast("已保存到历史记录！")
+    # 4. 启动按钮
+    if st.button("⚡️ 注入灵魂，显现号码", type="primary"):
+        with st.spinner("连接宇宙能量场..."):
+            res = tool.generate(game_type, period, r_count, b_count, is_append)
+            
+            # 结果展示卡片
+            st.markdown('<div class="cyber-card" style="border-color: #ff00cc; background: linear-gradient(135deg, #2a1a3a 0%, #1c1f26 100%);">', unsafe_allow_html=True)
+            st.markdown(f"<h3 style='text-align:center; margin:0 0 10px 0;'>✨ 显现成功 ✨</h3>", unsafe_allow_html=True)
+            render_balls_fancy(res['red'], res['blue'])
+            
+            # 简洁的信息展示
+            st.markdown(f"""
+            <div style="display:flex; justify-content:space-around; text-align:center; margin-top:15px; font-size:0.9em; color:#bbb;">
+                <div>💰 ¥{res['price']}</div>
+                <div>🧾 {res['bets']}注</div>
+                <div>📝 {'追加' if res['is_append'] else ''}{'复式' if res['bets']>1 else '单式'}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 构建纯净版复制文本 (无方括号)
+            red_str = " ".join([f"{r:02d}" for r in res['red']])
+            blue_str = " ".join([f"{b:02d}" for b in res['blue']])
+            append_str = "追加\n" if res['is_append'] else ""
+            
+            copy_text = f"""{res['game']}\n红球：{red_str}\n蓝球：{blue_str}\n{append_str}总价：{res['price']}元"""
+            
+            # JS 复制按钮 (更新样式和图标)
+            copy_html = f"""
+            <div class="copy-btn-container">
+                <button class="copy-btn" onclick="navigator.clipboard.writeText(`{copy_text}`).then(() => {{ this.innerHTML = '✅ 已复制到剪贴板'; setTimeout(() => {{ this.innerHTML = '📋 复制打票口令'; }}, 2000); }}).catch(err => {{ alert('复制失败，请手动复制'); }});">
+                    📋 复制打票口令
+                </button>
+            </div>
+            """
+            st.components.v1.html(copy_html, height=60)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # 保存逻辑
+            df_new = pd.DataFrame([res])
+            df_new['red'] = df_new['red'].apply(str)
+            df_new['blue'] = df_new['blue'].apply(str)
+            if os.path.exists(HISTORY_FILE): df_new.to_csv(HISTORY_FILE, mode='a', header=False, index=False)
+            else: df_new.to_csv(HISTORY_FILE, mode='w', header=True, index=False)
 
+# --- Tab 2: 记录 (移动端适配) ---
 with tab2:
-    st.subheader("📊 投注记录 & 核对")
-    
-    if os.path.exists(HISTORY_FILE):
-        df = pd.read_csv(HISTORY_FILE)
-        # 倒序显示
-        df = df.iloc[::-1]
-        
-        for index, row in df.iterrows():
-            with st.expander(f"{row['date']} - {row['game']} (第{row['period']}期)"):
-                # 还原数据格式
-                reds = eval(row['red'])
-                blues = eval(row['blue'])
-                render_balls(reds, blues)
-                st.write(f"投入: ¥{row['price']}")
-                
-                # 核对功能区
-                st.markdown("---")
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    win_input = st.text_input("输入开奖号码 (空格分隔, 蓝球在最后)", key=f"check_{index}")
-                with c2:
-                    check_btn = st.button("核对", key=f"btn_{index}")
-                
-                if check_btn and win_input:
-                    # 简单解析逻辑
-                    try:
-                        nums = [int(x) for x in win_input.split()]
-                        # 简单切分，大乐透后2位是蓝，双色球后1位是蓝
-                        split_idx = -2 if row['game'] == '大乐透' else -1
-                        real_red = set(nums[:split_idx])
-                        real_blue = set(nums[split_idx:])
-                        
-                        hit_red = set(reds) & real_red
-                        hit_blue = set(blues) & real_blue
-                        
-                        st.markdown(f"""
-                        **🎯 核对结果**:
-                        - 红球命中 ({len(hit_red)}): {list(hit_red) if hit_red else '无'}
-                        - 蓝球命中 ({len(hit_blue)}): {list(hit_blue) if hit_blue else '无'}
-                        """)
-                        if len(hit_red) + len(hit_blue) > 3:
-                            st.balloons()
-                    except:
-                        st.error("输入格式错误，请输入如: 05 12 20 25 30 03 10")
+    if not os.path.exists(HISTORY_FILE):
+        st.info("暂无记录，快去首页生成吧！")
     else:
-        st.write("暂无历史记录，快去生成第一注吧！")
+        df = pd.read_csv(HISTORY_FILE).iloc[::-1]
+        for idx, row in df.iterrows():
+            # 使用 Expander 作为记录项容器
+            with st.expander(f"{row['date']} | {row['game']} 第{row['period']}期"):
+                my_red = eval(row['red'])
+                my_blue = eval(row['blue'])
+                render_balls_fancy(my_red, my_blue)
+                
+                # 核对按钮区
+                check_status = st.empty()
+                if api_tool:
+                    if st.button("🔍 联网核对", key=f"btn_{idx}", use_container_width=True):
+                        with check_status.spinner("查询中..."):
+                            res_data, msg = api_tool.get_draw_result(row['game'], str(row['period']))
+                            if res_data:
+                                try:
+                                    real_red = [int(x) for x in res_data['number'].split()]
+                                    real_blue = [int(x) for x in res_data['refernumber'].split()]
+                                    
+                                    st.caption(f"开奖日: {res_data['opendate']}")
+                                    render_balls_fancy(real_red, real_blue)
+                                    
+                                    hit_r = set(my_red) & set(real_red)
+                                    hit_b = set(my_blue) & set(real_blue)
+                                    total_hit = len(hit_r) + len(hit_b)
+                                    
+                                    bg_color = '#1a3a2a' if total_hit > 2 else '#2c2f36'
+                                    st.markdown(f"""
+                                    <div style="background-color: {bg_color}; padding:10px; border-radius:8px; margin-top:10px;">
+                                        <div style="font-weight:bold;">🎯 命中统计: {total_hit}球</div>
+                                        <div style="font-size:0.9em; color:#bbb;">红球: {list(hit_r) if hit_r else '-'} | 蓝球: {list(hit_b) if hit_b else '-'}</div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                    if total_hit > 3: st.balloons()
+                                except: check_status.error("解析失败")
+                            else: check_status.warning(msg)
+                else: st.caption("⚠️ 请在首页设置 AppKey 才能核对")
+
+# --- Tab 3: 走势 (移动端适配) ---
+with tab3:
+    if not api_tool: st.info("请先在首页设置 AppKey")
+    else:
+        c1, c2 = st.columns([2,1])
+        trend_game = c1.selectbox("彩种", ["大乐透", "双色球"], key="trend_sel", label_visibility="collapsed")
+        if c2.button("刷新", use_container_width=True): st.toast("刷新中...")
+        
+        with st.spinner("加载数据..."):
+            history = api_tool.get_recent_history(trend_game, num=10)
+            if history:
+                for item in history:
+                    st.markdown(f"""
+                    <div class="cyber-card" style="padding: 10px; margin-bottom: 8px;">
+                        <div style="display:flex; justify-content:space-between; font-size:0.9em; margin-bottom:5px;">
+                            <b>第 {item['issueno']} 期</b><span>{item['opendate'][5:]}</span>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    r_balls = [int(x) for x in item['number'].split()]
+                    b_balls = [int(x) for x in item['refernumber'].split()]
+                    render_balls_fancy(r_balls, b_balls)
+                    st.markdown('</div>', unsafe_allow_html=True)
+            else: st.error("无法连接 API")
+
+# 底部留白，防止内容被手机浏览器底部栏遮挡
+st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
