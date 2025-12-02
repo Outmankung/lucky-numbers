@@ -1,4 +1,6 @@
 streamlit
 pandas
 requests
-zhdate>=0.1.13
+zhdate
+
+
